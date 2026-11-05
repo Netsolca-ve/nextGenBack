@@ -8,6 +8,7 @@ import { TeamsModule } from './teams/teams.module';
 import { AuthModule } from './auth/auth.module';
 import { CatalogsModule } from './catalogs/catalogs.module';
 import { UploadsModule } from './uploads/uploads.module';
+import { MatchesModule } from './matches/matches.module';
 
 
 @Module({
@@ -21,6 +22,7 @@ import { UploadsModule } from './uploads/uploads.module';
     AuthModule,
     CatalogsModule,
     UploadsModule,
+    MatchesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
