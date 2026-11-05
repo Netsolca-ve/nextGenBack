@@ -1,4 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { unlinkSync, renameSync } from 'node:fs';
+import { basename, extname, join } from 'node:path';
 import { DatabaseService } from '../database/database.service';
 import {
   CreateTeamDto,
@@ -29,9 +31,9 @@ async getAllTeams() {
         e.idEntrenador,
         CONCAT(ent.nombre, ' ', ent.apellido) AS nombreEntrenador,
         COUNT(j.idJugador) AS totalJugadores
-      FROM Equipos e
+      FROM equipos e
       LEFT JOIN academias a ON a.idAcademia = e.idAcademia
-      LEFT JOIN Entrenadores ent ON ent.idEntrenador = e.idEntrenador
+      LEFT JOIN entrenadores ent ON ent.idEntrenador = e.idEntrenador
       LEFT JOIN jugadores j ON j.idEquipo = e.idEquipo
       GROUP BY e.idEquipo
       ORDER BY e.nombre ASC;
@@ -56,9 +58,9 @@ async getAllTeams() {
         a.nombre AS nombreAcademia,
         e.idEntrenador,
         CONCAT(ent.nombre, ' ', ent.apellido) AS nombreEntrenador
-      FROM Equipos e
+      FROM equipos e
       LEFT JOIN academias a ON a.idAcademia = e.idAcademia
-      LEFT JOIN Entrenadores ent ON ent.idEntrenador = e.idEntrenador
+      LEFT JOIN entrenadores ent ON ent.idEntrenador = e.idEntrenador
       WHERE e.idEquipo = ?;
     `;
     const results: any = await this.db.query(sql, [idEquipo]);
@@ -68,17 +70,12 @@ async getAllTeams() {
     return results[0];
   }
 
-  async createTeam(dto: CreateTeamDto) {
-    const slug =
-      dto.slug ||
-      dto.nombre
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9]/g, '-')
-        .replace(/-+/g, '-');
+  async createTeam(dto: CreateTeamDto, logo?: Express.Multer.File) {
+    const slug = this.createSlug(dto.nombre);
+    const logoPath = logo ? this.renameTeamLogo(logo, slug) : dto.logo || null;
 
     const sql = `
-      INSERT INTO Equipos (
+      INSERT INTO equipos (
         nombre, slug, siglas, categoria, logo, 
         colorLocal, colorVisitante, horarioEntrenamientos, 
         diasEntrenamientos, idAcademia, idEntrenador
@@ -88,9 +85,9 @@ async getAllTeams() {
     const values = [
       dto.nombre,
       slug,
-      dto.siglas || null,
+      dto.siglas || '',
       dto.categoria,
-      dto.logo || null,
+      logoPath,
       dto.colorLocal || '#0284c7',
       dto.colorVisitante || '#ffffff',
       dto.horarioEntrenamientos || null,
@@ -99,7 +96,15 @@ async getAllTeams() {
       dto.idEntrenador || null,
     ];
 
-    const result: any = await this.db.query(sql, values);
+    let result: any;
+    try {
+      result = await this.db.query(sql, values);
+    } catch (error) {
+      if (logoPath && logo) {
+        unlinkSync(join(process.cwd(), logoPath.replace(/^\//, '')));
+      }
+      throw error;
+    }
 
     return {
       idEquipo: result.insertId,
@@ -107,8 +112,33 @@ async getAllTeams() {
         ? 'Equipo de academia registrado con éxito'
         : 'Equipo independiente registrado con éxito',
       ...dto,
+      logo: logoPath,
       slug,
     };
+  }
+
+  private createSlug(name: string): string {
+    const slug = name
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    return slug || 'equipo';
+  }
+
+  private renameTeamLogo(
+    logo: Express.Multer.File,
+    slug: string,
+  ): string {
+    const extension = extname(logo.originalname).toLowerCase();
+    const filename = `${basename(slug)}${extension}`;
+    const destination = join(process.cwd(), 'assets', 'temas', filename);
+
+    renameSync(logo.path, destination);
+    return `/assets/temas/${filename}`;
   }
 
   async updateTeam(idEquipo: number, dto: UpdateTeamDto) {
@@ -143,7 +173,7 @@ async getAllTeams() {
     }
 
     values.push(idEquipo);
-    const sql = `UPDATE Equipos SET ${fields.join(', ')} WHERE idEquipo = ?`;
+    const sql = `UPDATE equipos SET ${fields.join(', ')} WHERE idEquipo = ?`;
     await this.db.query(sql, values);
 
     return { message: 'Equipo actualizado con éxito' };
@@ -151,7 +181,7 @@ async getAllTeams() {
 
   async deleteTeam(idEquipo: number) {
     await this.getTeamById(idEquipo);
-    await this.db.query(`DELETE FROM Equipos WHERE idEquipo = ?`, [idEquipo]);
+    await this.db.query(`DELETE FROM equipos WHERE idEquipo = ?`, [idEquipo]);
     return { message: 'Equipo eliminado con éxito' };
   }
 

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -7,7 +8,12 @@ import {
   Body,
   Param,
   ParseIntPipe,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { TeamsService } from './teams.service';
 import {
   CreateTeamDto,
@@ -15,6 +21,9 @@ import {
   CreatePlayerDto,
   UpdatePlayerDto,
 } from './dto/teams.dto';
+
+const teamAssetsDirectory = join(process.cwd(), 'assets', 'temas');
+mkdirSync(teamAssetsDirectory, { recursive: true });
 
 @Controller('teams')
 export class TeamsController {
@@ -33,8 +42,26 @@ export class TeamsController {
   }
 
   @Post()
-  createTeam(@Body() dto: CreateTeamDto) {
-    return this.teamsService.createTeam(dto);
+  @UseInterceptors(
+    FileInterceptor('logo', {
+      dest: teamAssetsDirectory,
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_request, file, callback) => {
+        if (!file.mimetype.startsWith('image/')) {
+          return callback(
+            new BadRequestException('El logo debe ser una imagen'),
+            false,
+          );
+        }
+        callback(null, true);
+      },
+    }),
+  )
+  createTeam(
+    @Body() dto: CreateTeamDto,
+    @UploadedFile() logo?: Express.Multer.File,
+  ) {
+    return this.teamsService.createTeam(dto, logo);
   }
 
   @Put(':id')

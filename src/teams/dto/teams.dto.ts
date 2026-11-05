@@ -20,7 +20,7 @@ export class CreateTeamDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(10)
+  @MaxLength(3)
   siglas?: string;
 
   @IsString({ message: 'La categoría debe ser una cadena de texto' })
@@ -79,7 +79,7 @@ export class UpdateTeamDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(10)
+  @MaxLength(3)
   siglas?: string;
 
   @IsOptional()
