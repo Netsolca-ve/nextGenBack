@@ -50,11 +50,6 @@ export class TournamentsController {
         return this.tournamentsService.generatePlayoffs(id);
     }
 
-    @Post(':id/finales')
-    generateFinals(@Param('id', ParseIntPipe) id: number) {
-        return this.tournamentsService.generateFinals(id);
-    }
-
     @Post()
     @UseInterceptors(
         FileInterceptor('banner', {

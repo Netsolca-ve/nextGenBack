@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
+import { TournamentsService } from '../tournaments/tournaments.service';
 import {
   CreateMatchAlignmentDto,
   CreateGoalDto,
@@ -16,7 +18,12 @@ import {
 
 @Injectable()
 export class MatchesService {
-  constructor(private readonly db: DatabaseService) {}
+  private readonly logger = new Logger(MatchesService.name);
+
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly tournamentsService: TournamentsService,
+  ) {}
 
   async getAllMatches() {
     return this.db.query(`
@@ -44,6 +51,8 @@ export class MatchesService {
         DATE_FORMAT(CONVERT_TZ(p.creadoEl, '+00:00', '-04:00'), '%Y-%m-%d %H:%i:%s') AS creadoEl,
         DATE_FORMAT(CONVERT_TZ(t.fechaInicio, '+00:00', '-04:00'), '%Y-%m-%d %H:%i:%s') AS fechaInicioTorneo,
         DATE_FORMAT(CONVERT_TZ(t.fechaFin, '+00:00', '-04:00'), '%Y-%m-%d %H:%i:%s') AS fechaFinTorneo,
+        t.nombre AS nombreTorneo,
+        t.categoria,
         el.nombre AS nombreEquipoLocal,
         ev.nombre AS nombreEquipoVisitante
       FROM Partidos p
@@ -81,6 +90,8 @@ export class MatchesService {
           DATE_FORMAT(CONVERT_TZ(p.creadoEl, '+00:00', '-04:00'), '%Y-%m-%d %H:%i:%s') AS creadoEl,
           DATE_FORMAT(CONVERT_TZ(t.fechaInicio, '+00:00', '-04:00'), '%Y-%m-%d %H:%i:%s') AS fechaInicioTorneo,
           DATE_FORMAT(CONVERT_TZ(t.fechaFin, '+00:00', '-04:00'), '%Y-%m-%d %H:%i:%s') AS fechaFinTorneo,
+          t.nombre AS nombreTorneo,
+          t.categoria,
           el.nombre AS nombreEquipoLocal,
           ev.nombre AS nombreEquipoVisitante
         FROM Partidos p
@@ -371,7 +382,7 @@ export class MatchesService {
   }
 
   async updateMatch(idPartido: number, dto: MatchUpdateDto) {
-    await this.getMatch(idPartido);
+    const match = await this.getMatch(idPartido);
 
     const fields: string[] = [];
     const values: any[] = [];
@@ -411,6 +422,21 @@ export class MatchesService {
       `UPDATE Partidos SET ${fields.join(', ')} WHERE idPartido = ?`,
       [...values, idPartido],
     );
+
+    // Con cada resultado de la fase de grupos se reacomoda la fase
+    // definitoria (final 1° vs 2° y tercer lugar 3° vs 4°)
+    if (match.idTorneo && fields.some((field) => ['marcadorLocal', 'marcadorVisitante', 'status', 'fase'].includes(field))) {
+      try {
+        await this.tournamentsService.refreshDefinitoria(Number(match.idTorneo));
+      } catch (error) {
+        // El partido ya quedó guardado; la fase definitoria se reacomoda en el
+        // próximo guardado. Se registra el error para no perder el motivo.
+        this.logger.error(
+          `No se pudo refrescar la fase definitoria del torneo ${match.idTorneo}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
 
     return { message: 'Partido actualizado con éxito' };
   }

@@ -49,7 +49,7 @@ export class CreateTournamentDto {
   @IsOptional()
   @IsString()
   @MaxLength(30)
-  status?: string; // PROGRAMADO | EN_CURSO | INSCRIPCIONES_ABIERTAS | FINALIZADO
+  status?: string; // PROXIMAMENTE | PROGRAMADO | EN_CURSO | INSCRIPCIONES_ABIERTAS | FINALIZADO
 
   @IsOptional()
   @IsString()

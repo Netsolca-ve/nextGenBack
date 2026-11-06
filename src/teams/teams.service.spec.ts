@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { DatabaseService } from '../database/database.service';
 import { TeamsService } from './teams.service';
 
 describe('TeamsService', () => {
@@ -6,7 +7,7 @@ describe('TeamsService', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [TeamsService],
+      providers: [TeamsService, { provide: DatabaseService, useValue: { query: jest.fn() } }],
     }).compile();
 
     service = module.get<TeamsService>(TeamsService);
