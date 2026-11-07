@@ -24,10 +24,21 @@ async function bootstrap() {
     }),
   );
 
-  const port = Number(process.env.PORT ?? 3000);
+  // Koyeb inyecta PORT con el puerto expuesto del servicio (normalmente 8000).
+  // Si no existe, 8000 es el valor por defecto de Koyeb.
+  const port = Number(process.env.PORT ?? 8000);
 
-  await app.listen(port);
-  console.log(`Servidor escuchando en el puerto ${port}`);
+  if (!process.env.PORT) {
+    console.warn(
+      'PORT no está definida: usando 8000 por defecto (puerto expuesto de Koyeb).',
+    );
+  }
+
+  await app.listen(port, '0.0.0.0');
+  console.log(
+    `Servidor escuchando en el puerto ${port} (0.0.0.0). ` +
+      'El puerto expuesto en Koyeb debe coincidir con este.',
+  );
 }
 
 bootstrap().catch((error) => {
