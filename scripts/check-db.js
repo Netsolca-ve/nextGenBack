@@ -8,13 +8,20 @@
  */
 const mysql = require('mysql2/promise');
 
-const useSsl = (process.env.DB_SSL ?? 'false') === 'true';
+const host = (process.env.DB_HOST ?? 'localhost')
+  .trim()
+  .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+  .replace(/\/+$/, '');
+
+const sslRequested = ['true', '1', 'yes', 'on'].includes(
+  (process.env.DB_SSL ?? 'false').trim().toLowerCase(),
+);
+
+// TiDB Cloud exige TLS: se activa solo aunque DB_SSL no esté definido
+const useSsl = sslRequested || /\.tidbcloud\.com$/i.test(host);
 
 const config = {
-  host: (process.env.DB_HOST ?? 'localhost')
-    .trim()
-    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
-    .replace(/\/+$/, ''),
+  host,
   port: Number(process.env.DB_PORT ?? 3306),
   user: process.env.DB_USER ?? 'root',
   password: process.env.DB_PASSWORD ?? '',

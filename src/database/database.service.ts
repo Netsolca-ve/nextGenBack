@@ -10,14 +10,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly configService: ConfigService) {}
 
   async onModuleInit() {
-    const useSsl =
-      this.configService.get<string>('DB_SSL', 'false') === 'true';
-
     // Normaliza DB_HOST: quita esquema (http://), rutas y espacios por error
     const host = (this.configService.get<string>('DB_HOST', 'localhost') ?? '')
       .trim()
       .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
       .replace(/\/+$/, '');
+
+    const sslRequested = ['true', '1', 'yes', 'on'].includes(
+      (this.configService.get<string>('DB_SSL', 'false') ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+
+    // TiDB Cloud exige TLS: se activa solo aunque DB_SSL no esté definido
+    const useSsl = sslRequested || /\.tidbcloud\.com$/i.test(host);
+
     const port = Number(this.configService.get<string>('DB_PORT', '3306'));
     const database = this.configService.get<string>(
       'DB_NAME',
