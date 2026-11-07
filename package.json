@@ -5,7 +5,7 @@
   "author": "",
   "private": true,
   "license": "UNLICENSED",
-  "packageManager": "pnpm@12.10.1",
+  "packageManager": "pnpm@10.34.9",
   "engines": {
     "node": ">=22"
   },
