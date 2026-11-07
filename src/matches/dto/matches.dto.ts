@@ -161,9 +161,10 @@ export class CreateMatchAlignmentDto {
 }
 
 export class CreateGoalDto {
+  @IsOptional()
   @IsInt()
   @Min(0)
-  minuto: number;
+  minuto?: number | null;
 
   @IsBoolean()
   esAutogol: boolean;
@@ -186,7 +187,7 @@ export class UpdateGoalDto {
   @IsOptional()
   @IsInt()
   @Min(0)
-  minuto?: number;
+  minuto?: number | null;
 
   @IsOptional()
   @IsBoolean()
@@ -209,9 +210,10 @@ export class UpdateGoalDto {
 }
 
 export class CreateSubstitutionDto {
+  @IsOptional()
   @IsInt()
   @Min(0)
-  minuto: number;
+  minuto?: number | null;
 
   @IsInt()
   @Min(1)
@@ -234,7 +236,7 @@ export class UpdateSubstitutionDto {
   @IsOptional()
   @IsInt()
   @Min(0)
-  minuto?: number;
+  minuto?: number | null;
 
   @IsOptional()
   @IsInt()

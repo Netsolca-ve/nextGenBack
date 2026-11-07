@@ -182,7 +182,7 @@ export class MatchesService {
         LEFT JOIN jugadores a ON a.idJugador = g.idJugadorAsistencia
         LEFT JOIN equipos e ON e.idEquipo = g.idEquipo
         WHERE g.idPartido = ?
-        ORDER BY g.minuto ASC, g.idGol ASC;
+        ORDER BY g.minuto IS NULL, g.minuto ASC, g.idGol ASC;
       `,
       [idPartido],
     );
@@ -212,7 +212,7 @@ export class MatchesService {
         ) VALUES (?, ?, ?, ?, ?, ?)
       `,
       [
-        dto.minuto,
+        dto.minuto ?? null,
         dto.esAutogol,
         idPartido,
         dto.idJugador,
@@ -287,7 +287,7 @@ export class MatchesService {
         LEFT JOIN jugadores js ON js.idJugador = s.idJugadorSale
         LEFT JOIN jugadores je ON je.idJugador = s.idJugadorEntra
         WHERE s.idPartido = ?
-        ORDER BY s.minuto ASC, s.idSustitucionPartido ASC;
+        ORDER BY s.minuto IS NULL, s.minuto ASC, s.idSustitucionPartido ASC;
       `,
       [idPartido],
     );
@@ -319,7 +319,7 @@ export class MatchesService {
         ) VALUES (?, ?, ?, ?, ?, ?)
       `,
       [
-        dto.minuto,
+        dto.minuto ?? null,
         dto.periodo,
         idPartido,
         dto.idEquipo,
