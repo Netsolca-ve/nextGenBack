@@ -9,7 +9,12 @@ async function bootstrap() {
     bodyParser: false,
   });
 
-  app.enableCors();
+  // CORS: refleja el origen de la petición y permite credenciales.
+  // Con origin:'*' + credentials el navegador rechaza el preflight.
+  app.enableCors({
+    origin: true,
+    credentials: true,
+  });
 
   app.useBodyParser('json', { limit: '8mb' });
   app.useBodyParser('urlencoded', { extended: true, limit: '8mb' });
