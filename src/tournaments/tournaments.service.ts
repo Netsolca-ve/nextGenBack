@@ -8,6 +8,12 @@ import { CreateTournamentDto } from './dto/create-tounament.dto';
 /** Minutos de diferencia entre el inicio de un partido y el siguiente. */
 const ESPACIO_ENTRE_PARTIDOS_MINUTOS = 40;
 
+/** Banner por defecto cuando el torneo no tiene uno propio. */
+const DEFAULT_EVENT_BANNER = '/images/bannerEvento.jpg';
+
+/** Imagen de los torneos aún no anunciados (estado PROXIMAMENTE). */
+const PROXIMAMENTE_BANNER = '/images/proximamente.webp';
+
 
 @Injectable()
 export class TournamentsService {
@@ -210,6 +216,9 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
       `
         SELECT
           p.*,
+          COALESCE(NULLIF(TRIM(el.categoria), ''), NULLIF(TRIM(ev.categoria), '')) AS categoria,
+          el.categoria AS categoriaEquipoLocal,
+          ev.categoria AS categoriaEquipoVisitante,
           el.nombre AS nombreEquipoLocal,
           ev.nombre AS nombreEquipoVisitante
         FROM Partidos p
@@ -231,7 +240,7 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
     const puntosDerrota = Number.isFinite(Number(puntuacion.derrota)) ? Number(puntuacion.derrota) : 0;
     const teams: any[] = await this.db.query(
       `
-        SELECT et.idEquipo, e.nombre, e.siglas
+        SELECT et.idEquipo, e.nombre, e.siglas, e.categoria
         FROM equiposTorneo et
         INNER JOIN equipos e ON e.idEquipo = et.idEquipo
         WHERE et.idTorneo = ?;
@@ -257,6 +266,7 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
         idEquipo: team.idEquipo,
         nombre: team.nombre,
         siglas: team.siglas,
+        categoria: team.categoria,
         partidosJugados: 0,
         ganados: 0,
         empatados: 0,
