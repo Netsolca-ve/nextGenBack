@@ -13,29 +13,63 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const useSsl =
       this.configService.get<string>('DB_SSL', 'false') === 'true';
 
+    // Normaliza DB_HOST: quita esquema (http://), rutas y espacios por error
+    const host = (this.configService.get<string>('DB_HOST', 'localhost') ?? '')
+      .trim()
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+      .replace(/\/+$/, '');
+    const port = Number(this.configService.get<string>('DB_PORT', '3306'));
+    const database = this.configService.get<string>(
+      'DB_NAME',
+      'sports_management_db',
+    );
+
+    this.logger.log(
+      `Conectando a MySQL en ${host}:${port} (db: ${database}, ssl: ${useSsl})`,
+    );
+
     this.pool = mysql.createPool({
-      host: this.configService.get<string>('DB_HOST', 'localhost'),
-      port: Number(this.configService.get<string>('DB_PORT', '3306')),
+      host,
+      port,
       user: this.configService.get<string>('DB_USER', 'root'),
       password: this.configService.get<string>('DB_PASSWORD', ''),
-      database: this.configService.get<string>('DB_NAME', 'sports_management_db'),
+      database,
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
       decimalNumbers: true, // Convierte valores DECIMAL de MySQL a números JS en lugar de strings
+      connectTimeout: 10000,
       // SSL para TiDB en producción: se activa con DB_SSL=true en el .env
       ssl: useSsl
         ? { minVersion: 'TLSv1.2', rejectUnauthorized: true }
         : undefined,
     });
 
-    try {
-      const connection = await this.pool.getConnection();
-      this.logger.log('Conexión con MySQL establecida correctamente.');
-      connection.release();
-    } catch (error: any) {
-      this.logger.error('Error al conectar con MySQL:', error.message);
-      throw error;
+    // Reintenta el arranque: la BD puede tardar en despertar (TiDB serverless)
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const connection = await this.pool.getConnection();
+        this.logger.log('Conexión con MySQL establecida correctamente.');
+        connection.release();
+        return;
+      } catch (error: any) {
+        this.logger.error(
+          `Intento ${attempt}/${maxAttempts} falló al conectar a MySQL ` +
+            `[code=${error?.code ?? 'n/a'}, errno=${error?.errno ?? 'n/a'}, ` +
+            `sqlState=${error?.sqlState ?? 'n/a'}]: ${error?.message ?? error}`,
+        );
+
+        if (attempt === maxAttempts) {
+          this.logger.error(
+            `No se pudo conectar a ${host}:${port}/${database} con ssl=${useSsl}. ` +
+              'Revisa DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME y DB_SSL en las variables de entorno.',
+          );
+          throw error;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
     }
   }
 

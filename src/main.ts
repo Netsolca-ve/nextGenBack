@@ -29,4 +29,8 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`Servidor escuchando en el puerto ${port}`);
 }
-void bootstrap();
+
+bootstrap().catch((error) => {
+  console.error('Fallo al arrancar la aplicación:', error);
+  process.exit(1);
+});
