@@ -14,6 +14,9 @@ export class TeamsService {
     constructor(private readonly db: DatabaseService) {}
 
 async getAllTeams() {
+    // El conteo va en una subconsulta para no necesitar GROUP BY: TiDB/MySQL
+    // con ONLY_FULL_GROUP_BY rechaza columnas de tablas unidas que no estén
+    // en el GROUP BY.
     const sql = `
       SELECT 
         e.idEquipo,
@@ -30,12 +33,10 @@ async getAllTeams() {
         a.nombre AS nombreAcademia,
         e.idEntrenador,
         CONCAT(ent.nombre, ' ', ent.apellido) AS nombreEntrenador,
-        COUNT(j.idJugador) AS totalJugadores
+        (SELECT COUNT(*) FROM jugadores j WHERE j.idEquipo = e.idEquipo) AS totalJugadores
       FROM equipos e
       LEFT JOIN academias a ON a.idAcademia = e.idAcademia
       LEFT JOIN entrenadores ent ON ent.idEntrenador = e.idEntrenador
-      LEFT JOIN jugadores j ON j.idEquipo = e.idEquipo
-      GROUP BY e.idEquipo
       ORDER BY e.nombre ASC;
     `;
     return this.db.query(sql);
