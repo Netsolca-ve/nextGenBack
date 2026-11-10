@@ -1,5 +1,7 @@
+import { Type } from 'class-transformer';
 import {
   Allow,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsInt,
@@ -7,12 +9,41 @@ import {
   IsString,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 
 export class MatchUpdateDto {
+  // Registros nuevos del partido: se guardan junto con el resultado en una
+  // sola transacción (todo o nada).
   @IsOptional()
-  @Allow()
-  tarjetas?: unknown;
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateCardDto)
+  tarjetas?: CreateCardDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MatchAlignmentUpdateDto)
+  alineaciones?: MatchAlignmentUpdateDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateMatchAlignmentDto)
+  nuevasAlineaciones?: CreateMatchAlignmentDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateGoalDto)
+  goles?: CreateGoalDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateSubstitutionDto)
+  sustituciones?: CreateSubstitutionDto[];
 
   @IsOptional()
   @Allow()
@@ -257,4 +288,29 @@ export class UpdateSubstitutionDto {
   @IsInt()
   @Min(1)
   idJugadorEntra?: number;
+}
+
+export class CreateCardDto {
+  /** 'yellow' / 'red' (o 'amarilla' / 'roja'). */
+  @IsString()
+  @MaxLength(20)
+  tipo: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  minuto?: number | null;
+
+  @IsInt()
+  @Min(1)
+  idEquipo: number;
+
+  @IsInt({ message: 'Cada tarjeta debe indicar el jugador.' })
+  @Min(1)
+  idJugador: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  descripcion?: string | null;
 }

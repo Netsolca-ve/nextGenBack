@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { unlinkSync, renameSync } from 'node:fs';
-import { basename, extname, join } from 'node:path';
+import { createSlug } from '../common/slug';
 import { DatabaseService } from '../database/database.service';
+import { imageKeys } from '../storage/image-presets';
+import { ImageChange, StorageService } from '../storage/storage.service';
 import {
   CreateTeamDto,
   UpdateTeamDto,
@@ -11,7 +12,10 @@ import {
 
 @Injectable()
 export class TeamsService {
-    constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly storage: StorageService,
+  ) {}
 
 async getAllTeams() {
     // El conteo va en una subconsulta para no necesitar GROUP BY: TiDB/MySQL
@@ -39,7 +43,8 @@ async getAllTeams() {
       LEFT JOIN entrenadores ent ON ent.idEntrenador = e.idEntrenador
       ORDER BY e.nombre ASC;
     `;
-    return this.db.query(sql);
+    const teams = await this.db.query(sql);
+    return teams.map((team) => this.storage.withUrls(team, 'logo'));
   }
 
   async getTeamById(idEquipo: number) {
@@ -68,12 +73,31 @@ async getAllTeams() {
     if (!results || results.length === 0) {
       throw new NotFoundException(`Equipo con ID ${idEquipo} no encontrado`);
     }
+    return this.storage.withUrls(results[0], 'logo');
+  }
+
+  /** Fila tal cual está en la BD (logo como key, sin URL pública). */
+  private async getTeamRow(idEquipo: number) {
+    const results: any[] = await this.db.query(
+      `SELECT idEquipo, nombre, slug, logo FROM equipos WHERE idEquipo = ?`,
+      [idEquipo],
+    );
+    if (!results.length) {
+      throw new NotFoundException(`Equipo con ID ${idEquipo} no encontrado`);
+    }
     return results[0];
   }
 
   async createTeam(dto: CreateTeamDto, logo?: Express.Multer.File) {
-    const slug = this.createSlug(dto.nombre);
-    const logoPath = logo ? this.renameTeamLogo(logo, slug) : dto.logo || null;
+    const slug = await this.createUniqueSlug(dto.nombre);
+    const incomingLogo = logo
+      ? await this.storage.uploadTemp(logo.buffer, 'team')
+      : dto.logo;
+    const logoChange = await this.storage.assignImage({
+      incoming: incomingLogo,
+      currentKey: null,
+      targetKey: imageKeys.team(slug),
+    });
 
     const sql = `
       INSERT INTO equipos (
@@ -88,7 +112,7 @@ async getAllTeams() {
       slug,
       dto.siglas || '',
       dto.categoria,
-      logoPath,
+      logoChange.key,
       dto.colorLocal || '#0284c7',
       dto.colorVisitante || '#ffffff',
       dto.horarioEntrenamientos || null,
@@ -101,11 +125,10 @@ async getAllTeams() {
     try {
       result = await this.db.query(sql, values);
     } catch (error) {
-      if (logoPath && logo) {
-        unlinkSync(join(process.cwd(), logoPath.replace(/^\//, '')));
-      }
+      await this.storage.rollback(logoChange);
       throw error;
     }
+    await this.storage.commit(logoChange);
 
     return {
       idEquipo: result.insertId,
@@ -113,47 +136,46 @@ async getAllTeams() {
         ? 'Equipo de academia registrado con éxito'
         : 'Equipo independiente registrado con éxito',
       ...dto,
-      logo: logoPath,
+      logo: this.storage.url(logoChange.key),
       slug,
     };
   }
 
-  private createSlug(name: string): string {
-    const slug = name
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '');
+  /**
+   * Slug a partir del nombre, único entre los equipos (se le añade -2, -3...
+   * si ya existe). También nombra el logo en R2, por eso no puede repetirse.
+   */
+  private async createUniqueSlug(nombre: string, excludeIdEquipo?: number): Promise<string> {
+    const base = createSlug(nombre, 'equipo');
+    const rows: any[] = await this.db.query(
+      `SELECT slug FROM equipos WHERE (slug = ? OR slug LIKE ?) AND idEquipo <> ?`,
+      [base, `${base}-%`, excludeIdEquipo ?? 0],
+    );
+    const taken = new Set(rows.map((row) => row.slug));
 
-    return slug || 'equipo';
-  }
-
-  private renameTeamLogo(
-    logo: Express.Multer.File,
-    slug: string,
-  ): string {
-    const extension = extname(logo.originalname).toLowerCase();
-    const filename = `${basename(slug)}${extension}`;
-    const destination = join(process.cwd(), 'assets', 'temas', filename);
-
-    renameSync(logo.path, destination);
-    return `/assets/temas/${filename}`;
+    let slug = base;
+    for (let suffix = 2; taken.has(slug); suffix++) {
+      slug = `${base}-${suffix}`;
+    }
+    return slug;
   }
 
   async updateTeam(idEquipo: number, dto: UpdateTeamDto) {
-    await this.getTeamById(idEquipo);
+    const current = await this.getTeamRow(idEquipo);
+
+    // El slug sigue al nombre; sin slug guardado (equipos antiguos) se genera.
+    const slug =
+      dto.nombre !== undefined || !current.slug
+        ? await this.createUniqueSlug(dto.nombre ?? current.nombre, idEquipo)
+        : current.slug;
 
     const fields: string[] = [];
     const values: any[] = [];
 
     const allowedFields = [
       'nombre',
-      'slug',
       'siglas',
       'categoria',
-      'logo',
       'colorLocal',
       'colorVisitante',
       'horarioEntrenamientos',
@@ -169,20 +191,99 @@ async getAllTeams() {
       }
     }
 
+    const logoChange = await this.storage.assignImage({
+      incoming: dto.logo,
+      currentKey: current.logo,
+      targetKey: imageKeys.team(slug),
+    });
+
+    if (slug !== current.slug) {
+      fields.push('slug = ?');
+      values.push(slug);
+    }
+    if (logoChange.key !== current.logo) {
+      fields.push('logo = ?');
+      values.push(logoChange.key);
+    }
+
     if (fields.length === 0) {
-      return { message: 'No hay cambios para actualizar' };
+      // Un logo nuevo puede pisar la misma key: no cambia la BD, pero sí R2
+      await this.storage.commit(logoChange);
+      return {
+        message: logoChange.obsolete.length
+          ? 'Equipo actualizado con éxito'
+          : 'No hay cambios para actualizar',
+        slug,
+        logo: this.storage.url(logoChange.key),
+      };
     }
 
     values.push(idEquipo);
     const sql = `UPDATE equipos SET ${fields.join(', ')} WHERE idEquipo = ?`;
-    await this.db.query(sql, values);
+    try {
+      await this.db.query(sql, values);
+    } catch (error) {
+      await this.storage.rollback(logoChange);
+      throw error;
+    }
+    await this.storage.commit(logoChange);
 
-    return { message: 'Equipo actualizado con éxito' };
+    // Las fotos de los jugadores van en una carpeta con el slug del equipo
+    if (slug !== current.slug) {
+      await this.renamePlayerPhotos(idEquipo, slug);
+    }
+
+    return {
+      message: 'Equipo actualizado con éxito',
+      slug,
+      logo: this.storage.url(logoChange.key),
+    };
+  }
+
+  /** Mueve las fotos de la plantilla a la carpeta del nuevo slug del equipo. */
+  private async renamePlayerPhotos(idEquipo: number, teamSlug: string) {
+    const players: any[] = await this.db.query(
+      `SELECT idJugador, nombre, apellido, foto FROM jugadores WHERE idEquipo = ?`,
+      [idEquipo],
+    );
+
+    for (const player of players) {
+      if (!this.storage.isManagedKey(player.foto)) continue;
+
+      const change = await this.storage.assignImage({
+        incoming: undefined,
+        currentKey: player.foto,
+        targetKey: this.playerPhotoKey(teamSlug, player),
+      });
+      if (change.key === player.foto) continue;
+
+      await this.db.query(`UPDATE jugadores SET foto = ? WHERE idJugador = ?`, [
+        change.key,
+        player.idJugador,
+      ]);
+      await this.storage.commit(change);
+    }
+  }
+
+  private playerPhotoKey(
+    teamSlug: string,
+    player: { idJugador: number; nombre: string; apellido: string },
+  ) {
+    return imageKeys.player(
+      teamSlug,
+      createSlug(`${player.nombre} ${player.apellido}`, 'jugador'),
+      player.idJugador,
+    );
   }
 
   async deleteTeam(idEquipo: number) {
-    await this.getTeamById(idEquipo);
+    const team = await this.getTeamRow(idEquipo);
+    const players: any[] = await this.db.query(
+      `SELECT foto FROM jugadores WHERE idEquipo = ?`,
+      [idEquipo],
+    );
     await this.db.query(`DELETE FROM equipos WHERE idEquipo = ?`, [idEquipo]);
+    await this.storage.delete(team.logo, ...players.map((player) => player.foto));
     return { message: 'Equipo eliminado con éxito' };
   }
 
@@ -208,12 +309,16 @@ async getAllTeams() {
       WHERE idEquipo = ?
       ORDER BY numeroCamiseta ASC, apellido ASC;
     `;
-    return this.db.query(sql, [idEquipo]);
+    const players = await this.db.query(sql, [idEquipo]);
+    return players.map((player) => this.storage.withUrls(player, 'foto'));
   }
 
   async addPlayerToTeam(idEquipo: number, dto: CreatePlayerDto) {
-    await this.getTeamById(idEquipo);
+    const team = await this.getTeamRow(idEquipo);
+    const incomingFoto = this.storage.toKey(dto.foto);
 
+    // La foto se nombra con el idJugador: se inserta sin la foto subida y se
+    // asigna después.
     const sql = `
       INSERT INTO jugadores (
         nombre, apellido, tipoIdentificacion, identificacion, 
@@ -228,22 +333,55 @@ async getAllTeams() {
       dto.identificacion || null,
       dto.fechaNacimiento || null,
       dto.numeroCamiseta,
-      dto.foto || null,
+      this.storage.isTempKey(incomingFoto) ? null : incomingFoto,
       dto.posicion || null,
       idEquipo,
     ];
 
     const result: any = await this.db.query(sql, values);
+    const idJugador = result.insertId;
+    let foto = values[6] as string | null;
+
+    if (this.storage.isTempKey(incomingFoto)) {
+      const change = await this.storage.assignImage({
+        incoming: incomingFoto,
+        currentKey: null,
+        targetKey: this.playerPhotoKey(team.slug || createSlug(team.nombre, 'equipo'), {
+          idJugador,
+          nombre: dto.nombre,
+          apellido: dto.apellido,
+        }),
+      });
+      await this.db.query(`UPDATE jugadores SET foto = ? WHERE idJugador = ?`, [
+        change.key,
+        idJugador,
+      ]);
+      await this.storage.commit(change);
+      foto = change.key;
+    }
 
     return {
-      idJugador: result.insertId,
+      idJugador,
       idEquipo,
       message: 'Jugador añadido a la plantilla',
       ...dto,
+      foto: this.storage.url(foto),
     };
   }
 
   async updatePlayer(idJugador: number, dto: UpdatePlayerDto) {
+    const rows: any[] = await this.db.query(
+      `SELECT j.idJugador, j.nombre, j.apellido, j.foto, e.slug, e.nombre AS nombreEquipo
+       FROM jugadores j
+       LEFT JOIN equipos e ON e.idEquipo = j.idEquipo
+       WHERE j.idJugador = ?`,
+      [idJugador],
+    );
+    if (!rows.length) {
+      throw new NotFoundException(`Jugador con ID ${idJugador} no encontrado`);
+    }
+    const current = rows[0];
+
     const fields: string[] = [];
     const values: any[] = [];
 
@@ -254,7 +392,6 @@ async getAllTeams() {
       'identificacion',
       'fechaNacimiento',
       'numeroCamiseta',
-      'foto',
       'posicion',
     ];
 
@@ -265,18 +402,50 @@ async getAllTeams() {
       }
     }
 
+    // Cambiar el nombre o la foto renombra / reemplaza el archivo en R2
+    const fotoChange = await this.storage.assignImage({
+      incoming: dto.foto,
+      currentKey: current.foto,
+      targetKey: this.playerPhotoKey(current.slug || createSlug(current.nombreEquipo, 'equipo'), {
+        idJugador,
+        nombre: dto.nombre ?? current.nombre,
+        apellido: dto.apellido ?? current.apellido,
+      }),
+    });
+    if (fotoChange.key !== current.foto) {
+      fields.push('foto = ?');
+      values.push(fotoChange.key);
+    }
+
     if (fields.length === 0) {
-      return { message: 'No hay campos para actualizar' };
+      // Una foto nueva puede pisar la misma key: no cambia la BD, pero sí R2
+      await this.storage.commit(fotoChange);
+      return {
+        message: fotoChange.obsolete.length
+          ? 'Jugador actualizado con éxito'
+          : 'No hay campos para actualizar',
+        foto: this.storage.url(fotoChange.key),
+      };
     }
 
     values.push(idJugador);
     const sql = `UPDATE jugadores SET ${fields.join(', ')} WHERE idJugador = ?`;
-    await this.db.query(sql, values);
+    try {
+      await this.db.query(sql, values);
+    } catch (error) {
+      await this.storage.rollback(fotoChange);
+      throw error;
+    }
+    await this.storage.commit(fotoChange);
 
-    return { message: 'Jugador actualizado con éxito' };
+    return { message: 'Jugador actualizado con éxito', foto: this.storage.url(fotoChange.key) };
   }
 
   async deletePlayer(idJugador: number) {
+    const players: any[] = await this.db.query(
+      `SELECT foto FROM jugadores WHERE idJugador = ?`,
+      [idJugador],
+    );
     const res: any = await this.db.query(
       `DELETE FROM jugadores WHERE idJugador = ?`,
       [idJugador],
@@ -284,6 +453,7 @@ async getAllTeams() {
     if (res.affectedRows === 0) {
       throw new NotFoundException(`Jugador con ID ${idJugador} no encontrado`);
     }
+    await this.storage.delete(players[0]?.foto);
     return { message: 'Jugador eliminado de la plantilla' };
   }
 }

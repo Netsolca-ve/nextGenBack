@@ -8,8 +8,10 @@ import {
   IsString,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { Type } from 'class-transformer';
 
 const parseJson = ({ value }: { value: unknown }) => {
   if (typeof value !== 'string') return value;
@@ -20,6 +22,20 @@ const parseJson = ({ value }: { value: unknown }) => {
     return value;
   }
 };
+
+/** Equipos inscritos en una categoría dentro de un torneo multi-categoría. */
+export class CategoriaEquiposDto {
+  @IsString()
+  @IsNotEmpty({ message: 'Cada grupo de equipos debe indicar su categoría.' })
+  @MaxLength(100)
+  categoria: string; // ej: 'SUB 9'
+
+  @IsArray()
+  @IsInt({ each: true, message: 'Los equipos deben enviarse como una lista de IDs numéricos.' })
+  @ArrayMinSize(4, { message: 'Cada categoría requiere al menos 4 equipos.' })
+  @Transform(parseJson)
+  equiposIds: number[];
+}
 
 export class CreateTournamentDto {
   @IsString()
@@ -60,7 +76,20 @@ export class CreateTournamentDto {
   @IsInt({ each: true, message: 'Los equipos deben enviarse como una lista de IDs numéricos.' })
   @ArrayMinSize(4, { message: 'Se requieren al menos 4 equipos para generar el torneo.' })
   @Transform(parseJson)
-  equiposIds: number[]; // IDs de los equipos inscritos (mínimo 4)
+  equiposIds: number[]; // IDs de los equipos inscritos en total (mínimo 4)
+
+  /**
+   * Equipos agrupados por categoría: genera un fixture independiente por
+   * categoría (p. ej. SUB 9 y SUB 12 en el mismo torneo, cada una con sus
+   * 4 equipos jugando entre sí). Si no se envía, `equiposIds` se usa como
+   * una sola lista mezclada (compatibilidad con torneos antiguos).
+   */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true, message: 'Cada categoría necesita su lista de equipos.' })
+  @Type(() => CategoriaEquiposDto)
+  @Transform(parseJson)
+  categorias?: CategoriaEquiposDto[];
 
   @IsOptional()
   @IsInt()

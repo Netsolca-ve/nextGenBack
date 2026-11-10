@@ -1,7 +1,6 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { join } from 'path';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -18,8 +17,6 @@ async function bootstrap() {
 
   app.useBodyParser('json', { limit: '8mb' });
   app.useBodyParser('urlencoded', { extended: true, limit: '8mb' });
-  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
-  app.useStaticAssets(join(process.cwd(), 'assets'), { prefix: '/assets/' });
 
   app.useGlobalPipes(
     new ValidationPipe({

@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import * as mysql from 'mysql2/promise';
 
 export type DbStatus = 'connecting' | 'up' | 'down';
@@ -8,6 +9,9 @@ export type DbStatus = 'connecting' | 'up' | 'down';
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private pool: mysql.Pool;
   private readonly logger = new Logger(DatabaseService.name);
+
+  /** Conexión de la transacción en curso (ver `transaction`). */
+  private readonly transactionConnection = new AsyncLocalStorage<mysql.PoolConnection>();
 
   private status: DbStatus = 'connecting';
   private lastError: string | null = null;
@@ -52,6 +56,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       queueLimit: 0,
       decimalNumbers: true, // Convierte valores DECIMAL de MySQL a números JS en lugar de strings
       connectTimeout: 10000,
+      // Devuelve DATE/DATETIME como los strings tal cual se guardaron
+      // ('YYYY-MM-DD' / 'YYYY-MM-DD HH:MM:SS'), sin construir objetos Date.
+      // Así la API nunca serializa fechas a ISO-Z y el día no "se corre" un día
+      // según la zona horaria del servidor o del navegador.
+      dateStrings: true,
       // SSL para TiDB en producción: se activa con DB_SSL=true en el .env
       ssl: useSsl
         ? { minVersion: 'TLSv1.2', rejectUnauthorized: true }
@@ -154,8 +163,37 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   async query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
-    const [results] = await this.pool.query(sql, params);
+    // Dentro de `transaction` se usa su conexión: así cualquier servicio que
+    // llame a query() queda incluido en la transacción sin cambiar su código.
+    const executor = this.transactionConnection.getStore() ?? this.pool;
+    const [results] = await executor.query(sql, params);
     return results as T[];
+  }
+
+  /**
+   * Ejecuta `work` en una transacción: si algo falla se deshace todo y no
+   * quedan datos a medias (ej. un torneo sin partidos). Las transacciones
+   * anidadas reutilizan la de afuera.
+   */
+  async transaction<T>(work: () => Promise<T>): Promise<T> {
+    if (this.transactionConnection.getStore()) {
+      return work();
+    }
+
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await this.transactionConnection.run(connection, work);
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback().catch((rollbackError) =>
+        this.logger.error(`No se pudo deshacer la transacción: ${rollbackError?.message ?? rollbackError}`),
+      );
+      throw error;
+    } finally {
+      connection.release();
+    }
   }
 
   async onModuleDestroy() {

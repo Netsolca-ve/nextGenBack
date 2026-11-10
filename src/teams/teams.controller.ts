@@ -12,8 +12,6 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { TeamsService } from './teams.service';
 import {
   CreateTeamDto,
@@ -21,9 +19,6 @@ import {
   CreatePlayerDto,
   UpdatePlayerDto,
 } from './dto/teams.dto';
-
-const teamAssetsDirectory = join(process.cwd(), 'assets', 'temas');
-mkdirSync(teamAssetsDirectory, { recursive: true });
 
 @Controller('teams')
 export class TeamsController {
@@ -43,8 +38,8 @@ export class TeamsController {
 
   @Post()
   @UseInterceptors(
+    // Sin `dest`: el archivo queda en memoria y se sube a R2 ya procesado
     FileInterceptor('logo', {
-      dest: teamAssetsDirectory,
       limits: { fileSize: 5 * 1024 * 1024 },
       fileFilter: (_request, file, callback) => {
         if (!file.mimetype.startsWith('image/')) {

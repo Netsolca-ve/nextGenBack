@@ -11,8 +11,6 @@ import {
     UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { TournamentsService } from './tournaments.service';
 import { CreateTournamentDto } from './dto/create-tounament.dto';
 
@@ -53,7 +51,6 @@ export class TournamentsController {
     @Post()
     @UseInterceptors(
         FileInterceptor('banner', {
-            dest: join(process.cwd(), 'assets', 'torneos'),
             limits: { fileSize: 8 * 1024 * 1024 },
             fileFilter: (_request, file, callback) => {
                 if (!file.mimetype.startsWith('image/')) {
@@ -76,7 +73,6 @@ export class TournamentsController {
     @Put(':id')
     @UseInterceptors(
         FileInterceptor('banner', {
-            dest: join(process.cwd(), 'assets', 'torneos'),
             limits: { fileSize: 8 * 1024 * 1024 },
             fileFilter: (_request, file, callback) => {
                 if (!file.mimetype.startsWith('image/')) {
@@ -97,5 +93,3 @@ export class TournamentsController {
         return this.tournamentsService.updateTournament(id, dto, banner);
     }
 }
-
-mkdirSync(join(process.cwd(), 'assets', 'torneos'), { recursive: true });

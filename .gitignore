@@ -60,3 +60,6 @@ pids
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Respaldos del script de migración de imágenes a R2
+r2-migration-*.json

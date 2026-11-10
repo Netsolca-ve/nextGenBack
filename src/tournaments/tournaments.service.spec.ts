@@ -1,5 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { DatabaseService } from '../database/database.service';
+import { StorageService } from '../storage/storage.service';
+
+// StorageService real sin credenciales: los tests no suben imágenes a R2
+const storageStub = new StorageService({
+  get: (_name: string, fallback?: string) => fallback || 'test',
+} as any);
 import { TournamentsService } from './tournaments.service';
 
 const FORMATO_CONFIG = JSON.stringify({
@@ -79,7 +85,7 @@ function createDb() {
     return [];
   });
 
-  return { db: { query }, updates };
+  return { db: { query, transaction: (work: () => Promise<unknown>) => work() }, updates };
 }
 
 describe('TournamentsService', () => {
@@ -91,7 +97,7 @@ describe('TournamentsService', () => {
     updates = recorded;
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [TournamentsService, { provide: DatabaseService, useValue: db }],
+      providers: [TournamentsService, { provide: DatabaseService, useValue: db }, { provide: StorageService, useValue: storageStub }],
     }).compile();
 
     service = module.get<TournamentsService>(TournamentsService);
@@ -143,12 +149,173 @@ describe('TournamentsService', () => {
     });
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [TournamentsService, { provide: DatabaseService, useValue: db }],
+      providers: [TournamentsService, { provide: DatabaseService, useValue: db }, { provide: StorageService, useValue: storageStub }],
     }).compile();
     const isolated = module.get<TournamentsService>(TournamentsService);
 
     await isolated.refreshDefinitoria(7);
 
     expect(recorded).toHaveLength(0);
+  });
+});
+
+describe('TournamentsService (torneos multi-categoría)', () => {
+  const DTO_MULTI = {
+    nombre: 'Copa Mixta',
+    categoria: 'SUB 9, SUB 12',
+    status: 'PROGRAMADO',
+    fechaInicio: '2026-11-07',
+    fechaFin: '2026-11-08',
+    equiposIds: [1, 2, 3, 4, 5, 6, 7, 8],
+    formato_config: {
+      tipoTorneo: 'ROUND_ROBIN_CON_FINALES',
+      horaInicioJornada: '08:30',
+      categoriasHabilitadas: ['SUB 9', 'SUB 12'],
+      diasJuego: ['2026-11-07', '2026-11-08'],
+    },
+    categorias: [
+      { categoria: 'SUB 9', equiposIds: [1, 2, 3, 4] },
+      { categoria: 'SUB 12', equiposIds: [5, 6, 7, 8] },
+    ],
+  } as any;
+
+  function createService() {
+    const insertsPartido: any[][] = [];
+    const updatesTorneo: any[][] = [];
+    let idPartido = 500;
+
+    const query = jest.fn(async (rawSql: string, params: any[] = []) => {
+      const sql = rawSql.replace(/\s+/g, ' ').trim();
+
+      if (sql.includes('INSERT INTO torneos')) {
+        return { insertId: 77 };
+      }
+      if (sql.includes('INSERT INTO Partidos')) {
+        insertsPartido.push(params);
+        return { insertId: ++idPartido };
+      }
+      if (sql.includes('UPDATE torneos SET formato_config')) {
+        updatesTorneo.push(params);
+        return { affectedRows: 1 };
+      }
+      if (sql.includes('INSERT INTO equiposTorneo')) {
+        return { insertId: 1 };
+      }
+      return [];
+    });
+
+    return {
+      db: { query, transaction: (work: () => Promise<unknown>) => work() },
+      insertsPartido,
+      updatesTorneo,
+    };
+  }
+
+  async function buildService(db: any) {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [TournamentsService, { provide: DatabaseService, useValue: db }, { provide: StorageService, useValue: storageStub }],
+    }).compile();
+    return module.get<TournamentsService>(TournamentsService);
+  }
+
+  it('genera un fixture independiente por categoría (nunca cruzan SUB 9 con SUB 12)', async () => {
+    const { db, insertsPartido } = createService();
+    const service = await buildService(db);
+
+    const result: any = await service.createTournament(DTO_MULTI);
+
+    // Fase de grupos: 6 partidos por categoría (4 equipos, todos contra todos)
+    expect(result.partidosGruposGenerados).toBe(12);
+    // Un par de definitoria (final + tercer lugar) por categoría
+    expect(result.partidosDefinitoria).toBe(4);
+    expect(result.categorias).toBe(2);
+
+    // INSERT: [idTorneo, fase, ronda, local, visitante, duración, descanso, fecha]
+    const grupoParams = insertsPartido.filter((params) => params[1] === 'GRUPO');
+    expect(grupoParams).toHaveLength(12);
+    const sub9 = new Set([1, 2, 3, 4]);
+    const sub12 = new Set([5, 6, 7, 8]);
+
+    for (const params of grupoParams) {
+      const local = params[3];
+      const visitante = params[4];
+      const enSub9 = sub9.has(local) && sub9.has(visitante);
+      const enSub12 = sub12.has(local) && sub12.has(visitante);
+      // Cada partido debe quedar completamente dentro de una categoría
+      expect(enSub9 || enSub12).toBe(true);
+    }
+  });
+
+  it('escribe las fechas como "YYYY-MM-DD HH:MM:SS" (sin objetos Date)', async () => {
+    const { db, insertsPartido } = createService();
+    const service = await buildService(db);
+
+    await service.createTournament(DTO_MULTI);
+
+    for (const params of insertsPartido) {
+      const fecha = params[params.length - 1];
+      expect(typeof fecha).toBe('string');
+      expect(fecha).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    }
+
+    // El primer partido del día de inicio queda a la hora de inicio (08:30)
+    expect(insertsPartido[0][7]).toBe('2026-11-07 08:30:00');
+    // La fase definitoria se juega en el último día de juego
+    const definitorias = insertsPartido.filter((params) => params[1] !== 'GRUPO');
+    expect(definitorias).toHaveLength(4);
+    for (const params of definitorias) {
+      expect(params[7]).toMatch(/^2026-11-08 \d{2}:\d{2}:\d{2}$/);
+    }
+  });
+
+  it('guarda grupos y mapeo de la fase definitoria en formato_config', async () => {
+    const { db, updatesTorneo } = createService();
+    const service = await buildService(db);
+
+    await service.createTournament(DTO_MULTI);
+
+    // El torneo se guarda con las claves del servidor...
+    expect(updatesTorneo).toHaveLength(1);
+    const config = JSON.parse(updatesTorneo[0][0]);
+    expect(config.fixturesPorCategoria).toBe(true);
+    expect(config.gruposPorCategoria).toHaveLength(2);
+    expect(config.gruposPorCategoria[0]).toEqual({ categoria: 'SUB 9', equiposIds: [1, 2, 3, 4] });
+    // ...y el mapeo de finales por categoría se agrega al crearlas
+    expect(config.definitoriaPorCategoria).toHaveLength(2);
+    expect(config.definitoriaPorCategoria.map((fila: any) => fila.categoria)).toEqual(['SUB 9', 'SUB 12']);
+    for (const fila of config.definitoriaPorCategoria) {
+      expect(fila.idTercerLugar).toEqual(expect.any(Number));
+      expect(fila.idFinal).toEqual(expect.any(Number));
+    }
+  });
+
+  it('rechaza un equipo inscrito en dos categorías', async () => {
+    const { db } = createService();
+    const service = await buildService(db);
+
+    await expect(
+      service.createTournament({
+        ...DTO_MULTI,
+        categorias: [
+          { categoria: 'SUB 9', equiposIds: [1, 2, 3, 4] },
+          { categoria: 'SUB 12', equiposIds: [4, 6, 7, 8] },
+        ],
+      }),
+    ).rejects.toThrow(/dos categorías/);
+  });
+
+  it('rechaza una categoría con menos de 4 equipos', async () => {
+    const { db } = createService();
+    const service = await buildService(db);
+
+    await expect(
+      service.createTournament({
+        ...DTO_MULTI,
+        categorias: [
+          { categoria: 'SUB 9', equiposIds: [1, 2, 3, 4] },
+          { categoria: 'SUB 12', equiposIds: [5, 6, 7] },
+        ],
+      }),
+    ).rejects.toThrow(/al menos 4 equipos/);
   });
 });

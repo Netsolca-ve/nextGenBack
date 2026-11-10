@@ -46,6 +46,11 @@ export class MatchesController {
     return this.matchesService.createAlignment(id, dto);
   }
 
+  @Get(':id/tarjetas')
+  getCards(@Param('id', ParseIntPipe) id: number) {
+    return this.matchesService.getCards(id);
+  }
+
   @Get(':id/goles')
   getGoals(@Param('id', ParseIntPipe) id: number) {
     return this.matchesService.getGoals(id);
@@ -132,6 +137,11 @@ export class MatchesController {
     @Body() dto: MatchUpdateDto,
   ) {
     return this.matchesService.updateMatch(id, dto);
+  }
+
+  @Delete(':id')
+  deleteMatch(@Param('id', ParseIntPipe) id: number) {
+    return this.matchesService.deleteMatch(id);
   }
 
   @Put(':id/alineaciones')

@@ -9,6 +9,7 @@ import { AuthModule } from './auth/auth.module';
 import { CatalogsModule } from './catalogs/catalogs.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { MatchesModule } from './matches/matches.module';
+import { StorageModule } from './storage/storage.module';
 
 
 @Module({
@@ -17,6 +18,7 @@ import { MatchesModule } from './matches/matches.module';
       isGlobal: true,
     }),
     DatabaseModule,
+    StorageModule,
     TournamentsModule,
     TeamsModule,
     AuthModule,
