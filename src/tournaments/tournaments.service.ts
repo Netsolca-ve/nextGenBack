@@ -1,5 +1,5 @@
 // src/tournaments/tournaments.service.ts
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { createSlug } from '../common/slug';
 import { DatabaseService } from '../database/database.service';
 import { imageKeys } from '../storage/image-presets';
@@ -1545,7 +1545,13 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
       porCategoria,
       regenerar ? null : existentes[0].formato_config,
     );
-    if (conCalendario) {
+    // Los partidos ya generados solo se tocan si cambia algo que los afecta:
+    // equipos o formato (se regeneran) o fechas, días, horario y duración (se
+    // reprograman los pendientes). Solo entonces se valida el calendario.
+    const cambiaCalendario =
+      this.calendarSignature(previo, existentes[0].fechaInicio, existentes[0].fechaFin) !==
+      this.calendarSignature(this.parseFormatoConfig(configJson), fechaInicio, fechaFin);
+    if (regenerar || (conCalendario && cambiaCalendario)) {
       this.resolveCalendar(this.parseFormatoConfig(configJson), fechaInicio, fechaFin);
     }
 
@@ -1586,13 +1592,10 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
         } else if (conCalendario) {
           // Solo se reprograma si cambió el calendario: así no se pierden los
           // horarios que se ajustaron a mano en cada partido.
-          const cambiaCalendario =
-            this.calendarSignature(previo, existentes[0].fechaInicio, existentes[0].fechaFin) !==
-            this.calendarSignature(this.parseFormatoConfig(configJson), fechaInicio, fechaFin);
           if (cambiaCalendario) {
             await this.reschedulePendingMatches(idTorneo, this.parseFormatoConfig(configJson), fechaInicio, fechaFin);
+            await this.refreshDefinitoria(idTorneo);
           }
-          await this.refreshDefinitoria(idTorneo);
         }
       });
     } catch (error) {
@@ -1605,12 +1608,38 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
       idTorneo,
       message: regenerar
         ? 'Torneo actualizado y calendario generado de nuevo.'
-        : 'Torneo actualizado con éxito.',
+        : conCalendario && cambiaCalendario
+          ? 'Torneo actualizado; los partidos pendientes se reprogramaron.'
+          : 'Torneo actualizado sin cambiar los partidos.',
       equiposInscritos: new Set(grupos.flatMap((grupo) => grupo.equiposIds)).size,
       categorias: grupos.length,
       calendarioRegenerado: regenerar,
       banner: this.storage.url(bannerPath),
     };
+  }
+
+  /**
+   * Elimina el torneo con sus partidos (y sus goles, tarjetas, cambios y
+   * alineaciones) e inscripciones, en una transacción. El banner se borra de
+   * R2 después de confirmar.
+   */
+  async deleteTournament(idTorneo: number) {
+    const torneos: any[] = await this.db.query(
+      `SELECT idTorneo, nombre, banner FROM torneos WHERE idTorneo = ?`,
+      [idTorneo],
+    );
+    if (!torneos.length) {
+      throw new NotFoundException(`Torneo con ID ${idTorneo} no encontrado`);
+    }
+
+    await this.db.transaction(async () => {
+      await this.deleteTournamentMatches(idTorneo);
+      await this.db.query(`DELETE FROM equiposTorneo WHERE idTorneo = ?`, [idTorneo]);
+      await this.db.query(`DELETE FROM torneos WHERE idTorneo = ?`, [idTorneo]);
+    });
+    await this.storage.delete(torneos[0].banner);
+
+    return { idTorneo, message: `Torneo "${torneos[0].nombre}" eliminado con éxito.` };
   }
 
   /** Borra los partidos del torneo y sus registros (goles, tarjetas, cambios, alineaciones). */

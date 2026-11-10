@@ -227,3 +227,38 @@ describe('TournamentsService: editar torneo', () => {
     expect(db.query.mock.calls.some(([sql]: any[]) => /DELETE FROM Partidos WHERE idTorneo/.test(sql))).toBe(true);
   });
 });
+
+describe('TournamentsService: editar sin tocar los partidos', () => {
+  it('cambiar solo el nombre no modifica ni valida el calendario', async () => {
+    const config = {
+      tipoTorneo: 'ROUND_ROBIN_CON_FINALES',
+      horaInicioJornada: '08:30',
+      tiemposPorPartido: 2,
+      duracionTiempoMinutos: 20,
+      duracionDescansoMinutos: 5,
+      // Torneo antiguo sin días de juego: no debe exigirlos para renombrarlo
+      diasJuego: [],
+      fixturesPorCategoria: true,
+      gruposPorCategoria: categorias(2, 4),
+    };
+    const { db } = createDb((sql) => {
+      if (sql.startsWith('SELECT idTorneo, banner, formato_config')) {
+        return [{ idTorneo: 9, banner: '/images/bannerEvento.jpg', formato_config: JSON.stringify(config), fechaInicio: '2026-12-05', fechaFin: '2026-12-13' }];
+      }
+      if (sql.startsWith('SELECT idPartido, marcadorLocal')) return [{ idPartido: 1, marcadorLocal: 1, marcadorVisitante: 0 }];
+      if (sql.startsWith('SELECT idEquipo FROM equiposTorneo')) return [];
+      return undefined;
+    });
+
+    const result: any = await (await buildService(db)).updateTournament(
+      9,
+      torneo({ nombre: 'Copa renombrada' }, { diasJuego: [] }) as any,
+    );
+
+    expect(result.message).toBe('Torneo actualizado sin cambiar los partidos.');
+    const tocaPartidos = db.query.mock.calls.some(([sql]: any[]) =>
+      /(UPDATE|DELETE FROM|INSERT INTO) Partidos/.test(sql),
+    );
+    expect(tocaPartidos).toBe(false);
+  });
+});

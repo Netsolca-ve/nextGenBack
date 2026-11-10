@@ -2,6 +2,7 @@ import {
     BadRequestException,
     Body,
     Controller,
+    Delete,
     Get,
     Param,
     ParseIntPipe,
@@ -46,6 +47,11 @@ export class TournamentsController {
     @Post(':id/playoffs')
     generatePlayoffs(@Param('id', ParseIntPipe) id: number) {
         return this.tournamentsService.generatePlayoffs(id);
+    }
+
+    @Delete(':id')
+    deleteTournament(@Param('id', ParseIntPipe) id: number) {
+        return this.tournamentsService.deleteTournament(id);
     }
 
     @Post()
