@@ -56,7 +56,9 @@ export class MatchesService {
         t.nombre AS nombreTorneo,
         t.categoria,
         el.nombre AS nombreEquipoLocal,
-        ev.nombre AS nombreEquipoVisitante
+        ev.nombre AS nombreEquipoVisitante,
+        el.categoria AS categoriaEquipoLocal,
+        ev.categoria AS categoriaEquipoVisitante
       FROM Partidos p
       LEFT JOIN torneos t ON t.idTorneo = p.idTorneo
       LEFT JOIN equipos el ON el.idEquipo = p.idEquipoLocal
@@ -95,7 +97,9 @@ export class MatchesService {
           t.nombre AS nombreTorneo,
           t.categoria,
           el.nombre AS nombreEquipoLocal,
-          ev.nombre AS nombreEquipoVisitante
+          ev.nombre AS nombreEquipoVisitante,
+          el.categoria AS categoriaEquipoLocal,
+          ev.categoria AS categoriaEquipoVisitante
         FROM Partidos p
         LEFT JOIN torneos t ON t.idTorneo = p.idTorneo
         LEFT JOIN equipos el ON el.idEquipo = p.idEquipoLocal
@@ -456,6 +460,7 @@ export class MatchesService {
 
   private async applyMatchUpdate(idPartido: number, dto: MatchUpdateDto) {
     const match = await this.getMatch(idPartido);
+    await this.assertTeamsMatchCategory(match, dto);
 
     // Cambio de equipos (reemplazo de última hora): los dos lados deben ser
     // equipos distintos e inscritos en el torneo, y los registros del equipo
@@ -616,6 +621,7 @@ export class MatchesService {
     return { message: 'Partido actualizado con éxito' };
   }
 
+<<<<<<< Updated upstream
   /**
    * Elimina un partido junto con sus registros dependientes (goles, cambios y
    * alineaciones), en ese orden para no chocar con las llaves foráneas.
@@ -640,6 +646,73 @@ export class MatchesService {
     }
 
     return { idPartido, message: 'Partido eliminado con éxito' };
+=======
+  /** Normaliza una categoría para comparar "SUB-12", "SUB 12" y "sub12". */
+  private normalizeCategory(value?: string | null): string {
+    return String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
+  }
+
+  /**
+   * Al reemplazar equipos de un partido, los nuevos deben ser de la misma
+   * categoría que el partido (la de sus equipos originales) y no pueden
+   * coincidir en los dos lados.
+   */
+  private async assertTeamsMatchCategory(match: any, dto: MatchUpdateDto) {
+    const nuevoLocal = (dto as any).idEquipoLocal;
+    const nuevoVisitante = (dto as any).idEquipoVisitante;
+    const cambiaLocal =
+      nuevoLocal !== undefined && nuevoLocal !== null && Number(nuevoLocal) !== Number(match.idEquipoLocal ?? 0);
+    const cambiaVisitante =
+      nuevoVisitante !== undefined &&
+      nuevoVisitante !== null &&
+      Number(nuevoVisitante) !== Number(match.idEquipoVisitante ?? 0);
+    if (!cambiaLocal && !cambiaVisitante) return;
+
+    const localFinal = Number(nuevoLocal ?? match.idEquipoLocal ?? 0);
+    const visitanteFinal = Number(nuevoVisitante ?? match.idEquipoVisitante ?? 0);
+    if (localFinal > 0 && localFinal === visitanteFinal) {
+      throw new BadRequestException('Un equipo no puede jugar contra sí mismo.');
+    }
+
+    // Categoría del partido: la de sus equipos actuales; si aún no tiene
+    // equipos, la del torneo cuando este tiene una sola categoría.
+    const categoriaTorneo = String(match.categoria ?? '');
+    const categoriaPartido = this.normalizeCategory(
+      match.categoriaEquipoLocal ||
+        match.categoriaEquipoVisitante ||
+        (categoriaTorneo.includes(',') ? '' : categoriaTorneo),
+    );
+    if (!categoriaPartido) return;
+
+    const ids = [cambiaLocal ? Number(nuevoLocal) : 0, cambiaVisitante ? Number(nuevoVisitante) : 0].filter(
+      (id) => id > 0,
+    );
+    if (!ids.length) return;
+
+    const equipos: Array<{ idEquipo: number; nombre: string; categoria: string | null }> = await this.db.query(
+      `SELECT idEquipo, nombre, categoria FROM equipos WHERE idEquipo IN (${ids.map(() => '?').join(', ')})`,
+      ids,
+    );
+
+    for (const id of ids) {
+      const equipo = equipos.find((item) => Number(item.idEquipo) === id);
+      if (!equipo) {
+        throw new BadRequestException(`El equipo con ID ${id} no existe.`);
+      }
+      if (this.normalizeCategory(equipo.categoria) !== categoriaPartido) {
+        throw new BadRequestException(
+          `El equipo ${equipo.nombre} es de la categoría ${equipo.categoria ?? 'sin definir'} y el partido es de la ${
+            match.categoriaEquipoLocal || match.categoriaEquipoVisitante || categoriaTorneo
+          }.`,
+        );
+      }
+    }
+>>>>>>> Stashed changes
   }
 
   async updateAlignments(
