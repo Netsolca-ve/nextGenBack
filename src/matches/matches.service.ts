@@ -621,7 +621,6 @@ export class MatchesService {
     return { message: 'Partido actualizado con éxito' };
   }
 
-<<<<<<< Updated upstream
   /**
    * Elimina un partido junto con sus registros dependientes (goles, cambios y
    * alineaciones), en ese orden para no chocar con las llaves foráneas.
@@ -646,7 +645,8 @@ export class MatchesService {
     }
 
     return { idPartido, message: 'Partido eliminado con éxito' };
-=======
+  }
+
   /** Normaliza una categoría para comparar "SUB-12", "SUB 12" y "sub12". */
   private normalizeCategory(value?: string | null): string {
     return String(value ?? '')
@@ -712,7 +712,6 @@ export class MatchesService {
         );
       }
     }
->>>>>>> Stashed changes
   }
 
   async updateAlignments(
