@@ -82,11 +82,12 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
   // no queda un torneo a medias (sin partidos o sin la fase definitoria).
   const { idTorneo, fixture } = await this.db.transaction(async () => {
     const torneoResult: any = await this.db.query(
-      `INSERT INTO torneos (nombre, categoria, formato_config, status, fechaInicio, fechaFin, banner)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO torneos (nombre, categoria, sede, formato_config, status, fechaInicio, fechaFin, banner)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         nombre,
         categoria,
+        this.sedeFrom(dto),
         configJson,
         status || 'PROGRAMADO',
         fechaInicio || null,
@@ -485,6 +486,53 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
     }));
   }
 
+  /**
+   * Máximos goleadores del torneo (sin autogoles), con la categoría del
+   * equipo dentro del torneo para filtrarlos igual que la tabla.
+   */
+  async getTopScorers(idTorneo: number) {
+    const tournament: any = await this.ensureTournamentExists(idTorneo);
+    const categoriaPorEquipo = this.categoriaPorEquipo(this.parseFormatoConfig(tournament.formato_config));
+    const rows: any[] = await this.db.query(
+      `
+        SELECT g.idJugador, j.nombre, j.apellido, j.foto, g.idEquipo,
+               e.nombre AS nombreEquipo, e.logo AS logoEquipo, e.categoria AS categoriaEquipo,
+               COUNT(*) AS goles
+        FROM goles g
+        INNER JOIN Partidos p ON p.idPartido = g.idPartido
+        INNER JOIN jugadores j ON j.idJugador = g.idJugador
+        LEFT JOIN equipos e ON e.idEquipo = g.idEquipo
+        WHERE p.idTorneo = ? AND (g.esAutogol = 0 OR g.esAutogol IS NULL)
+        GROUP BY g.idJugador, j.nombre, j.apellido, j.foto, g.idEquipo, e.nombre, e.logo, e.categoria
+        ORDER BY goles DESC, j.apellido ASC, j.nombre ASC;
+      `,
+      [idTorneo],
+    );
+
+    return rows.map(({ categoriaEquipo, ...row }) => ({
+      ...row,
+      goles: Number(row.goles),
+      foto: this.storage.url(row.foto),
+      logoEquipo: this.storage.url(row.logoEquipo),
+      categoria: categoriaPorEquipo.get(Number(row.idEquipo)) ?? categoriaEquipo,
+    }));
+  }
+
+  /**
+   * En torneos multi-categoría la categoría "oficial" del equipo dentro del
+   * torneo viene de formato_config (puede diferir de su categoría guardada).
+   */
+  private categoriaPorEquipo(config: any): Map<number, string> {
+    const categorias = new Map<number, string>();
+    const grupos = Array.isArray(config.gruposPorCategoria) ? config.gruposPorCategoria : [];
+    for (const grupo of grupos) {
+      for (const idEquipo of grupo.equiposIds ?? []) {
+        categorias.set(Number(idEquipo), String(grupo.categoria ?? ''));
+      }
+    }
+    return categorias;
+  }
+
   async getStandings(idTorneo: number) {
     const tournament: any = await this.ensureTournamentExists(idTorneo);
     const config = this.parseFormatoConfig(tournament.formato_config);
@@ -514,15 +562,7 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
     );
 
     const standings = new Map<number, any>();
-    // En torneos multi-categoría la categoría "oficial" del equipo dentro del
-    // torneo viene de formato_config (puede diferir de su categoría guardada)
-    const categoriaPorEquipo = new Map<number, string>();
-    const grupos = Array.isArray(config.gruposPorCategoria) ? config.gruposPorCategoria : [];
-    for (const grupo of grupos) {
-      for (const idEquipo of grupo.equiposIds ?? []) {
-        categoriaPorEquipo.set(Number(idEquipo), String(grupo.categoria ?? ''));
-      }
-    }
+    const categoriaPorEquipo = this.categoriaPorEquipo(config);
 
     for (const team of teams) {
       standings.set(team.idEquipo, {
@@ -1251,6 +1291,12 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
     ]);
   }
 
+  /** Sede del torneo; los formularios antiguos la enviaban en formato_config.place. */
+  private sedeFrom(dto: CreateTournamentDto): string | null {
+    const place = this.parseFormatoConfig(dto.formato_config).place;
+    return dto.sede?.trim() || (typeof place === 'string' ? place.trim() : '') || null;
+  }
+
   private isProximamente(status?: string | null): boolean {
     return String(status ?? '').trim().toUpperCase() === 'PROXIMAMENTE';
   }
@@ -1568,10 +1614,11 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
     try {
       await this.db.transaction(async () => {
         await this.db.query(
-          `UPDATE torneos SET nombre = ?, categoria = ?, formato_config = ?, status = ?, fechaInicio = ?, fechaFin = ?, banner = ? WHERE idTorneo = ?`,
+          `UPDATE torneos SET nombre = ?, categoria = ?, sede = ?, formato_config = ?, status = ?, fechaInicio = ?, fechaFin = ?, banner = ? WHERE idTorneo = ?`,
           [
             nombre,
             categoria,
+            this.sedeFrom(dto),
             configJson,
             status || 'PROGRAMADO',
             fechaInicio || null,
@@ -1691,6 +1738,7 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
             t.idTorneo,
             t.nombre,
             t.categoria,
+            t.sede,
             t.status,
             t.fechaInicio,
             t.fechaFin,
@@ -1719,35 +1767,58 @@ async createTournament(dto: CreateTournamentDto, banner?: Express.Multer.File) {
         return this.db.query(sql, [idTorneo]);
     }
 
+    /**
+     * Torneo destacado del home, según su fecha (en hora de Venezuela):
+     * 1. el que se está jugando, 2. el próximo más cercano, 3. el último que
+     * terminó (si no hay ninguno más). Devuelve `estadoCalendario` para que
+     * el front muestre el contador, "en curso" o "finalizado".
+     */
     async getNearestTournament(){
+        const hoy = this.todayInVenezuela();
         const sql = `
-        SELECT 
-        t.idTorneo,
-        t.nombre,
-        t.categoria,
-        t.status,
-        t.fechaInicio,
-        t.fechaFin,
-        t.banner,
-        t.formato_config,
-        COUNT(DISTINCT et.idEquipo) AS totalEquipos,
-        COUNT(DISTINCT p.idPartido) AS totalPartidos
-        FROM torneos t
-        LEFT JOIN equiposTorneo et ON et.idTorneo = t.idTorneo
-        LEFT JOIN Partidos p ON p.idTorneo = t.idTorneo
-        GROUP BY t.idTorneo
-        ORDER BY 
-        CASE 
-            WHEN t.status = 'EN_CURSO' THEN 1
-            WHEN t.status = 'PROGRAMADO' AND t.fechaInicio >= CURDATE() THEN 2
-            ELSE 3
+        SELECT * FROM (
+            SELECT
+            t.idTorneo,
+            t.nombre,
+            t.categoria,
+            t.sede,
+            t.status,
+            t.fechaInicio,
+            t.fechaFin,
+            t.banner,
+            t.formato_config,
+            -- Conteos en subconsultas: sin GROUP BY (ONLY_FULL_GROUP_BY en TiDB/MariaDB)
+            (SELECT COUNT(*) FROM equiposTorneo et WHERE et.idTorneo = t.idTorneo) AS totalEquipos,
+            (SELECT COUNT(*) FROM Partidos p WHERE p.idTorneo = t.idTorneo) AS totalPartidos,
+            CASE
+                WHEN t.status = 'PROXIMAMENTE' OR t.fechaInicio IS NULL THEN 'PROXIMAMENTE'
+                WHEN t.status = 'FINALIZADO' THEN 'FINALIZADO'
+                WHEN t.status = 'EN_CURSO' THEN 'EN_CURSO'
+                WHEN t.fechaInicio > ? THEN 'PROXIMO'
+                WHEN COALESCE(t.fechaFin, t.fechaInicio) >= ? THEN 'EN_CURSO'
+                ELSE 'FINALIZADO'
+            END AS estadoCalendario
+            FROM torneos t
+        ) torneo
+        ORDER BY
+        CASE estadoCalendario
+            WHEN 'EN_CURSO' THEN 1
+            WHEN 'PROXIMO' THEN 2
+            WHEN 'FINALIZADO' THEN 3
+            ELSE 4
         END ASC,
-        t.fechaInicio ASC,
-        t.idTorneo DESC
+        CASE WHEN estadoCalendario = 'PROXIMO' THEN fechaInicio END ASC,
+        COALESCE(fechaFin, fechaInicio) DESC,
+        idTorneo DESC
         LIMIT 1;
         `;
 
-        const results = await this.db.query(sql);
+        const results = await this.db.query(sql, [hoy, hoy]);
         return results.length > 0 ? this.storage.withUrls(results[0], 'banner') : null;
-    } 
+    }
+
+    /** 'YYYY-MM-DD' de hoy en Venezuela (el servidor y la BD corren en UTC). */
+    private todayInVenezuela(): string {
+        return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Caracas' }).format(new Date());
+    }
 }

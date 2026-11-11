@@ -69,6 +69,11 @@ export class CreateTournamentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(150)
+  sede?: string | null;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(255)
   banner?: string;
 

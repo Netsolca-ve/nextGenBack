@@ -262,3 +262,58 @@ describe('TournamentsService: editar sin tocar los partidos', () => {
     expect(tocaPartidos).toBe(false);
   });
 });
+
+describe('TournamentsService: sede', () => {
+  async function sedeGuardada(dto: any) {
+    let params: any[] = [];
+    const { db } = createDb((sql, p) => {
+      if (sql.includes('INSERT INTO torneos')) {
+        params = p;
+        return { insertId: 9 };
+      }
+      return undefined;
+    });
+    await (await buildService(db)).createTournament(dto);
+    return params[2];
+  }
+
+  it('guarda la sede enviada en el campo sede', async () => {
+    expect(await sedeGuardada(torneo({ sede: '  Club Bella Vista ' }))).toBe('Club Bella Vista');
+  });
+
+  it('usa formato_config.place si el formulario es antiguo', async () => {
+    expect(await sedeGuardada(torneo({}, { place: 'Cancha Los Olivos' }))).toBe('Cancha Los Olivos');
+  });
+
+  it('guarda null si no hay sede', async () => {
+    expect(await sedeGuardada(torneo())).toBeNull();
+  });
+});
+
+describe('TournamentsService: goleadores', () => {
+  it('devuelve los goleadores con la categoría del torneo y sin autogoles en la consulta', async () => {
+    let sqlGoleadores = '';
+    const { db } = createDb((sql) => {
+      if (sql.includes('FROM torneos')) {
+        return [{ idTorneo: 9, formato_config: JSON.stringify({ gruposPorCategoria: [{ categoria: 'SUB 9', equiposIds: [1] }] }) }];
+      }
+      if (sql.includes('FROM goles g')) {
+        sqlGoleadores = sql;
+        return [
+          { idJugador: 7, nombre: 'Ana', apellido: 'Pérez', foto: null, idEquipo: 1, nombreEquipo: 'Leones', logoEquipo: null, categoriaEquipo: 'SUB-10', goles: '3' },
+          { idJugador: 8, nombre: 'Luis', apellido: 'Gómez', foto: null, idEquipo: 2, nombreEquipo: 'Tigres', logoEquipo: null, categoriaEquipo: 'SUB 12', goles: '1' },
+        ];
+      }
+      return undefined;
+    });
+
+    const goleadores: any[] = await (await buildService(db)).getTopScorers(9);
+
+    expect(sqlGoleadores).toContain('esAutogol = 0');
+    expect(goleadores.map((g) => [g.idJugador, g.categoria, g.goles])).toEqual([
+      [7, 'SUB 9', 3],
+      [8, 'SUB 12', 1],
+    ]);
+    expect(goleadores[0]).not.toHaveProperty('categoriaEquipo');
+  });
+});

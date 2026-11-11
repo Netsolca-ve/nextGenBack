@@ -39,6 +39,11 @@ export class TournamentsController {
         return this.tournamentsService.getTournamentMatches(id);
     }
 
+    @Get(':id/goleadores')
+    getTopScorers(@Param('id', ParseIntPipe) id: number) {
+        return this.tournamentsService.getTopScorers(id);
+    }
+
     @Get(':id/posiciones')
     getStandings(@Param('id', ParseIntPipe) id: number) {
         return this.tournamentsService.getStandings(id);
